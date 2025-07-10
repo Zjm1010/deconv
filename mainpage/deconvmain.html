@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>贝叶斯反卷积噪声误差模拟</title>
+    <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.bootcdn.net/ajax/libs/mathjs/11.10.1/math.min.js"></script>
+    <script src="https://cdn.bootcdn.net/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { background: #f8f9fa; }
+        .card { border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); }
+        .slider-card { background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%); }
+        .chart-container { height: 400px; position: relative; }
+        .control-label { color: white; font-weight: 500; }
+        .legend-toggle { cursor: pointer; }
+        .legend-toggle.active { opacity: 1; }
+        .legend-toggle.inactive { opacity: 0.5; }
+    </style>
+</head>
+<body>
+<div class="container py-4">
+    <div class="text-center mb-5">
+        <h1 class="display-4 fw-bold">贝叶斯反卷积噪声误差分析</h1>
+        <p class="lead text-muted">探索噪声水平如何影响反卷积结果稳定性</p>
+    </div>
+
+    <div class="row mb-4">
+        <div class="col-md-8 mx-auto">
+            <div class="card slider-card p-4 mb-4">
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="control-label">噪声水平 σ</label>
+                        <input type="range" class="form-range" id="noiseSlider" min="0.01" max="1.0" step="0.01" value="0.2">
+                        <span id="noiseValue" class="badge bg-light text-dark">0.2</span>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <label class="control-label">先验强度 λ</label>
+                        <input type="range" class="form-range" id="priorSlider" min="0.001" max="0.5" step="0.001" value="0.05">
+                        <span id="priorValue" class="badge bg-light text-dark">0.05</span>
+                    </div>
+                </div>
+                <button id="simulateBtn" class="btn btn-light w-100 py-2 fw-bold">运行贝叶斯反卷积模拟</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mb-3">
+        <div class="col-md-12">
+            <div class="card p-3">
+                <div class="d-flex justify-content-center flex-wrap" id="legendControls">
+                    <!-- 动态生成的图例控制按钮 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card p-4">
+                <div class="chart-container">
+                    <canvas id="deconvolutionChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const ctx = document.getElementById('deconvolutionChart').getContext('2d');
+    let chart;
+    const signalLength = 100;
+    const datasetsConfig = [
+        {
+            label: '原始信号',
+            borderColor: '#6a11cb',
+            borderWidth: 3,
+            pointRadius: 0,
+            tension: 0.2,
+            hidden: false
+        },
+        {
+            label: '含噪观测信号',
+            borderColor: '#2575fc',
+            borderWidth: 2,
+            pointRadius: 0,
+            borderDash: [5, 5],
+            tension: 0.1,
+            hidden: false
+        },
+        {
+            label: '贝叶斯反卷积重建',
+            borderColor: '#ff2e63',
+            borderWidth: 3,
+            pointRadius: 0,
+            tension: 0.2,
+            hidden: false
+        },
+        {
+            label: '直接求逆重建',
+            borderColor: '#EB7347',
+            borderWidth: 3,
+            pointRadius: 0,
+            tension: 0.2,
+            hidden: false
+        }
+    ];
+
+    // 初始化界面
+    document.getElementById('noiseValue').textContent = document.getElementById('noiseSlider').value;
+    document.getElementById('priorValue').textContent = document.getElementById('priorSlider').value;
+
+    // 生成示例信号 (高斯脉冲)
+    function generateSignal() {
+        const signal = new Array(signalLength).fill(0);
+        for (let i = 0; i < 3; i++) {
+            const pos = 20 + i * 30;
+            const amp = 0.5 + Math.random() * 0.5;
+            for (let j = -10; j <= 10; j++) {
+                if (pos + j >= 0 && pos + j < signalLength) {
+                    signal[pos + j] += amp * Math.exp(-0.5 * (j/3)**2);
+                }
+            }
+        }
+        return signal;
+    }
+
+    // 卷积函数
+    function convolve(signal, kernel) {
+        const result = new Array(signal.length + kernel.length - 1).fill(0);
+        for (let i = 0; i < signal.length; i++) {
+            for (let j = 0; j < kernel.length; j++) {
+                result[i + j] += signal[i] * kernel[j];
+            }
+        }
+        return result.slice(0, signal.length);
+    }
+
+    // 直接求逆反卷积
+    function directDeconv(y, H) {
+        const n = y.length;
+        const m = H.length;
+        // 1. 构建托普利兹卷积矩阵
+        const convMatrix = Array(n).fill().map(() => Array(n).fill(0));
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j < m; j++) {
+                if (i - j >= 0) convMatrix[i][i - j] = H[j];
+            }
+        }
+
+        // 2. 直接求逆（添加正则化避免奇异矩阵）
+        const lambda = 1e-5; // Tikhonov正则化参数
+        const I = createIdentityMatrix(n);
+        const HtH = math.multiply(math.transpose(convMatrix), convMatrix);
+        const invMatrix = math.multiply(
+            math.inv(math.add(HtH, math.multiply(I, lambda))),
+            math.transpose(convMatrix)
+        );
+
+        // 3. 重建信号
+        return math.multiply(invMatrix, y);
+    }
+
+    // 贝叶斯反卷积 (避免直接求逆)
+    function bayesianDeconvolution(observed, kernel, priorStrength) {
+        // 构建卷积矩阵 H
+        const signalLength = observed.length;
+        let H = createZeroMatrix(signalLength, signalLength);
+
+        for (let i = 0; i < signalLength; i++) {
+            for (let j = 0; j < kernel.length; j++) {
+                const colIndex = i - j;
+                if (colIndex >= 0 && colIndex < signalLength) {
+                    H = math.subset(
+                        H,
+                        math.index(i, colIndex),
+                        kernel[j]
+                    );
+                }
+            }
+        }
+
+        const Ht = math.transpose(H);
+        const HtH = math.multiply(Ht, H);
+        const lambdaSq = priorStrength ** 2;
+        const regMatrix = math.add(HtH, math.multiply(lambdaSq, createIdentityMatrix(signalLength)));
+        const Hty = math.multiply(Ht, math.matrix(observed));
+
+        const xReconstructed = math.lusolve(regMatrix, Hty);
+        return xReconstructed.flat();
+    }
+
+    // 创建并更新图表
+    function updateChart(original, observed, directReverse, reconstructed) {
+        const labels = Array.from({length: signalLength}, (_, i) => i);
+
+        // 准备数据集
+        const datasets = [
+            { ...datasetsConfig[0], data: original },
+            { ...datasetsConfig[1], data: observed },
+            { ...datasetsConfig[2], data: reconstructed },
+            { ...datasetsConfig[3], data: directReverse }
+        ];
+
+        if (chart) {
+            // 更新现有图表数据
+            chart.data.labels = labels;
+            chart.data.datasets.forEach((dataset, i) => {
+                dataset.data = datasets[i].data;
+                dataset.hidden = datasetsConfig[i].hidden;
+            });
+            chart.update();
+        } else {
+            // 创建新图表
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: datasets
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false
+                    },
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: '时间/样本点',
+                                font: {
+                                    size: 14,
+                                    weight: 'bold'
+                                }
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: '信号幅值',
+                                font: {
+                                    size: 14,
+                                    weight: 'bold'
+                                }
+                            },
+                            suggestedMin: Math.min(...original, ...observed, ...reconstructed, ...directReverse) - 0.5,
+                            suggestedMax: Math.max(...original, ...observed, ...reconstructed, ...directReverse) + 0.5
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false // 禁用默认图例，使用自定义控制
+                        },
+                        title: {
+                            display: true,
+                            text: '贝叶斯反卷积演示',
+                            font: {
+                                size: 18,
+                                weight: 'bold'
+                            },
+                            padding: {
+                                top: 10,
+                                bottom: 20
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                            padding: 12,
+                            titleFont: {
+                                size: 14
+                            },
+                            bodyFont: {
+                                size: 13
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // 更新图例控制按钮
+        updateLegendControls();
+    }
+
+    // 更新图例控制按钮
+    function updateLegendControls() {
+        const legendControls = document.getElementById('legendControls');
+        legendControls.innerHTML = '';
+
+        datasetsConfig.forEach((dataset, index) => {
+            const button = document.createElement('button');
+            button.className = `btn btn-sm mx-2 legend-toggle ${dataset.hidden ? 'inactive' : 'active'}`;
+            button.style.backgroundColor = dataset.borderColor;
+            button.style.borderColor = dataset.borderColor;
+            button.style.color = 'white';
+            button.innerHTML = `<i class="fas fa-${dataset.hidden ? 'eye-slash' : 'eye'} me-2"></i>${dataset.label}`;
+
+            button.addEventListener('click', () => {
+                dataset.hidden = !dataset.hidden;
+                chart.data.datasets[index].hidden = dataset.hidden;
+                chart.update();
+                button.className = `btn btn-sm mx-2 legend-toggle ${dataset.hidden ? 'inactive' : 'active'}`;
+                button.innerHTML = `<i class="fas fa-${dataset.hidden ? 'eye-slash' : 'eye'} me-2"></i>${dataset.label}`;
+
+                // 自动调整Y轴范围
+                const visibleData = chart.data.datasets
+                    .filter(ds => !ds.hidden)
+                    .flatMap(ds => ds.data);
+
+                if (visibleData.length > 0) {
+                    chart.options.scales.y.suggestedMin = Math.min(...visibleData) - 0.5;
+                    chart.options.scales.y.suggestedMax = Math.max(...visibleData) + 0.5;
+                    chart.update();
+                }
+            });
+
+            legendControls.appendChild(button);
+        });
+    }
+
+    // 运行模拟
+    function runSimulation() {
+        const noiseLevel = parseFloat(document.getElementById('noiseSlider').value);
+        const priorStrength = parseFloat(document.getElementById('priorSlider').value);
+
+        // 生成信号和卷积核
+        const originalSignal = generateSignal();
+        const kernel = [0.1, 0.2, 0.4, 0.2, 0.1]; // 高斯卷积核
+
+        // 卷积操作
+        const convolved = convolve(originalSignal, kernel);
+
+        // 添加噪声
+        const observedSignal = convolved.map(val => {
+            const noise = noiseLevel * (2 * Math.random() - 1);
+            return val + noise;
+        });
+
+        // 贝叶斯反卷积
+        const reconstructed = bayesianDeconvolution(observedSignal, kernel, priorStrength);
+        // 直接求逆
+        const directReverse = directDeconv(observedSignal, kernel);
+
+        // 更新图表
+        updateChart(originalSignal, observedSignal, directReverse, reconstructed);
+    }
+
+    function createIdentityMatrix(size) {
+        const matrix = [];
+        for (let i = 0; i < size; i++) {
+            const row = Array(size).fill(0);
+            row[i] = 1;
+            matrix.push(row);
+        }
+        return matrix;
+    }
+
+    function createZeroMatrix(a, b){
+        const matrix = [];
+        for (let i = 0; i < a; i++){
+            const row = Array(b).fill(0);
+            matrix.push(row);
+        }
+        return matrix;
+    }
+
+    // 事件监听
+    document.getElementById('noiseSlider').addEventListener('input', function() {
+        document.getElementById('noiseValue').textContent = this.value;
+    });
+
+    document.getElementById('priorSlider').addEventListener('input', function() {
+        document.getElementById('priorValue').textContent = this.value;
+    });
+
+    document.getElementById('simulateBtn').addEventListener('click', runSimulation);
+
+    // 初始运行
+    runSimulation();
+</script>
+</body>
+</html>
