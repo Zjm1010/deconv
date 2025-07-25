@@ -97,15 +97,16 @@
             pointRadius: 0,
             tension: 0.2,
             hidden: false
-        },
-        {
-            label: '直接求逆重建',
-            borderColor: '#EB7347',
-            borderWidth: 3,
-            pointRadius: 0,
-            tension: 0.2,
-            hidden: false
         }
+        // ,
+        // {
+        //     label: '直接求逆重建',
+        //     borderColor: '#EB7347',
+        //     borderWidth: 3,
+        //     pointRadius: 0,
+        //     tension: 0.2,
+        //     hidden: false
+        // }
     ];
 
     // 初始化界面
@@ -343,8 +344,8 @@
         // 贝叶斯反卷积
         const reconstructed = bayesianDeconvolution(observedSignal, kernel, priorStrength);
         // 直接求逆
-        const directReverse = directDeconv(observedSignal, kernel);
-
+        // const directReverse = directDeconv(observedSignal, kernel);
+        const directReverse = [];
         // 更新图表
         updateChart(originalSignal, observedSignal, directReverse, reconstructed);
     }

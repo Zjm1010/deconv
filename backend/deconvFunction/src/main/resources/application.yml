@@ -1,0 +1,32 @@
+server:
+  port: 18090
+
+application:
+  app:
+    name: deconvfunc
+spring:
+  sql:
+    init:
+      schema-locations: classpath:h2/schema.sql
+      data-locations: classpath:h2/data.sql
+      continue-on-error: false
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+      settings:
+        web-allow-others: true
+  jpa:
+    hibernate:
+      ddl-auto: update  # 自动创建表结构
+  mvc:
+    pathmatch:
+      matching-strategy: ant_path_matcher
+  profiles:
+    active: prod
+  application:
+    name: deconvfunc
+mybatis-plus:
+  #  type-enums-package: com.cestc.di.mes.interface.server.dao.constants
+  configuration:
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
